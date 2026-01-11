@@ -23,17 +23,20 @@ pub struct DirEntry {
 pub struct DiskCache {
     /// Map of absolute paths to directory entries
     pub entries: HashMap<PathBuf, DirEntry>,
-    
+
     /// Last scan timestamp
     pub last_scan: DateTime<Utc>,
-    
+
     /// Root path (e.g., C:\)
     pub root: PathBuf,
-    
+
+    /// Last scanned directory (for subsequent runs to only scan current dir)
+    pub last_scanned_root: PathBuf,
+
     /// Pending writes (buffered for batch updates)
     #[serde(skip)]
     pub pending_writes: Vec<(PathBuf, DirEntry)>,
-    
+
     /// Maximum pending writes before flush
     #[serde(skip)]
     pub flush_threshold: usize,
@@ -52,7 +55,25 @@ impl DiskCache {
             let mut file = File::open(path)?;
             let mut data = Vec::new();
             file.read_to_end(&mut data)?;
-            let mut cache: DiskCache = bincode::deserialize(&data)?;
+
+            // Try to deserialize as new format, fall back to old format if needed
+            let mut cache: DiskCache = match bincode::deserialize(&data) {
+                Ok(c) => c,
+                Err(_) => {
+                    // Likely old cache format without last_scanned_root
+                    // Create fresh cache and delete old one to avoid future errors
+                    let _ = fs::remove_file(path);
+                    DiskCache {
+                        entries: HashMap::new(),
+                        last_scan: Utc::now(),
+                        root: PathBuf::new(),
+                        last_scanned_root: PathBuf::new(),
+                        pending_writes: Vec::new(),
+                        flush_threshold: 10000,
+                    }
+                }
+            };
+
             cache.pending_writes = Vec::new();
             cache.flush_threshold = 10000; // Flush every 10k entries
             Ok(cache)
@@ -61,6 +82,7 @@ impl DiskCache {
                 entries: HashMap::new(),
                 last_scan: Utc::now(),
                 root: PathBuf::new(),
+                last_scanned_root: PathBuf::new(),
                 pending_writes: Vec::new(),
                 flush_threshold: 10000,
             })

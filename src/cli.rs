@@ -114,6 +114,14 @@ pub struct Args {
     /// Enable incremental updates via USN Journal (Windows only)
     #[arg(long)]
     pub incremental: bool,
+
+    // ========================================================================
+    // Debugging & Diagnostics
+    // ========================================================================
+
+    /// Enable debug output with timing and performance metrics
+    #[arg(long)]
+    pub debug: bool,
 }
 
 pub fn parse_args() -> Args {

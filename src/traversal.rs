@@ -4,9 +4,22 @@ use std::collections::VecDeque;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::{Instant, Duration};
 use chrono::Utc;
 use parking_lot::RwLock;
 use anyhow::Result;
+
+/// Debug timing information
+#[derive(Debug, Clone)]
+pub struct DebugInfo {
+    pub is_first_run: bool,
+    pub scan_root: PathBuf,
+    pub cache_used: bool,
+    pub traversal_time: Duration,
+    pub save_time: Duration,
+    pub total_dirs: usize,
+    pub threads_used: usize,
+}
 
 /// Shared state for parallel DFS traversal across worker threads
 pub struct TraversalState {
@@ -25,19 +38,35 @@ pub struct TraversalState {
 
 /// Traverse disk and update cache
 ///
+/// Returns DebugInfo with timing information if --debug is enabled
+///
 /// Algorithm:
-/// 1. Check cache freshness (< 1 hour). If fresh and not forced, return early.
-/// 2. Initialize work queue with root directory
-/// 3. Spawn worker threads that process queue in parallel (DFS)
-/// 4. Flush all pending writes and save cache atomically
-pub fn traverse_disk(drive: &char, cache: &mut DiskCache, args: &Args) -> Result<()> {
-    let root = PathBuf::from(format!("{}:\\", drive));
+/// 1. On first run: Full scan of specified drive and cache results
+/// 2. On subsequent runs: Only scan current directory (where command is run)
+/// 3. Check cache freshness (< 1 hour). If fresh and not forced, return early.
+/// 4. Initialize work queue with target directory
+/// 5. Spawn worker threads that process queue in parallel (DFS)
+/// 6. Flush all pending writes and save cache atomically
+pub fn traverse_disk(drive: &char, cache: &mut DiskCache, args: &Args) -> Result<DebugInfo> {
+    // Get the current working directory
+    let current_dir = std::env::current_dir()?;
 
-    if !root.exists() {
-        anyhow::bail!("Drive {} does not exist", drive);
-    }
+    // Determine scan root: full drive on first run, current dir on subsequent runs
+    let is_first_run = cache.entries.is_empty();
+    let scan_root = if is_first_run {
+        // First run: scan the specified drive
+        let root = PathBuf::from(format!("{}:\\", drive));
+        if !root.exists() {
+            anyhow::bail!("Drive {} does not exist", drive);
+        }
+        root
+    } else {
+        // Subsequent runs: scan only the current directory
+        current_dir.clone()
+    };
 
-    cache.root = root.clone();
+    cache.root = scan_root.clone();
+    cache.last_scanned_root = scan_root.clone();
 
     // ============================================================================
     // Check Cache Freshness
@@ -47,7 +76,15 @@ pub fn traverse_disk(drive: &char, cache: &mut DiskCache, args: &Args) -> Result
         let now = Utc::now();
         let age = now.signed_duration_since(cache.last_scan);
         if age.num_seconds() < 3600 && !cache.entries.is_empty() {
-            return Ok(()); // Cache is fresh, skip rescan
+            return Ok(DebugInfo {
+                is_first_run: false,
+                scan_root: cache.root.clone(),
+                cache_used: true,
+                traversal_time: Duration::from_secs(0),
+                save_time: Duration::from_secs(0),
+                total_dirs: cache.entries.len(),
+                threads_used: 0,
+            });
         }
     }
 
@@ -56,7 +93,7 @@ pub fn traverse_disk(drive: &char, cache: &mut DiskCache, args: &Args) -> Result
     // ============================================================================
 
     let mut work_queue = VecDeque::new();
-    work_queue.push_back(root.clone());
+    work_queue.push_back(scan_root.clone());
 
     let state = TraversalState {
         work_queue: Arc::new(Mutex::new(work_queue)),
@@ -79,6 +116,7 @@ pub fn traverse_disk(drive: &char, cache: &mut DiskCache, args: &Args) -> Result
     // Spawn Worker Threads for Parallel DFS Traversal
     // ============================================================================
 
+    let traversal_start = Instant::now();
     pool.in_place_scope(|s| {
         for _ in 0..num_threads {
             let work = Arc::clone(&state.work_queue);
@@ -91,6 +129,7 @@ pub fn traverse_disk(drive: &char, cache: &mut DiskCache, args: &Args) -> Result
             });
         }
     });
+    let traversal_elapsed = traversal_start.elapsed();
 
     // ============================================================================
     // Extract & Save Final Cache
@@ -108,9 +147,23 @@ pub fn traverse_disk(drive: &char, cache: &mut DiskCache, args: &Args) -> Result
     cache.last_scan = Utc::now();
 
     let cache_path = crate::cache::get_cache_path()?;
+    let save_start = Instant::now();
     cache.save(&cache_path)?;
+    let save_elapsed = save_start.elapsed();
 
-    Ok(())
+    // ============================================================================
+    // Return Debug Info
+    // ============================================================================
+
+    Ok(DebugInfo {
+        is_first_run,
+        scan_root: cache.root.clone(),
+        cache_used: false,
+        traversal_time: traversal_elapsed,
+        save_time: save_elapsed,
+        total_dirs: cache.entries.len(),
+        threads_used: num_threads,
+    })
 }
 
 /// Worker thread for DFS traversal

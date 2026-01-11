@@ -52,13 +52,14 @@ ptree.exe --quiet --force
 
 ## Documentation Guide
 
-### Documentation Guide
-
 **I want to use ptree:**
 → Read **README.md** (5 min)
 
 **I want practical examples:**
 → Read **USAGE_EXAMPLES.md** (20 min)
+
+**I want to see performance metrics:**
+→ Read **DEBUG_MODE.md** (10 min)
 
 **I want colors explained:**
 → Read **COLORED_OUTPUT_QUICKSTART.md** (5 min)
@@ -68,6 +69,9 @@ ptree.exe --quiet --force
 
 **I want to understand how it works:**
 → Read **ARCHITECTURE.md** (30 min)
+
+**I want to benchmark performance:**
+→ Run `cargo bench --release` and read **BENCHMARKING.md** (15 min)
 
 **I want to modify the code:**
 → Read **IMPLEMENTATION_GUIDE.md** (40 min)
@@ -93,9 +97,14 @@ ptree/
 │
 ├── docs/
 │   ├── START_HERE.md             ← Navigation guide (you are here)
+│   ├── DEBUG_MODE.md             ← Performance debugging
+│   ├── BENCHMARKING.md           ← Criterion benchmarks
 │   ├── COLORED_OUTPUT.md         ← Detailed color feature guide
 │   ├── COLORED_OUTPUT_QUICKSTART.md  ← Quick color reference
 │   └── USAGE_EXAMPLES.md         ← Real-world scenarios
+│
+├── benches/
+│   └── traversal_benchmarks.rs   ← Criterion benchmarks
 │
 └── CONFIG
     ├── Cargo.toml                # Project manifest
@@ -207,9 +216,10 @@ ptree.exe --help
 
 1. **Just want to use it?** → Run `ptree.exe`
 2. **Want practical examples?** → Read `USAGE_EXAMPLES.md`
-3. **Want colors explained?** → Read `COLORED_OUTPUT_QUICKSTART.md`
-4. **Want to understand design?** → Read `ARCHITECTURE.md`
-5. **Want to modify code?** → Read `IMPLEMENTATION_GUIDE.md`
+3. **Want to see performance?** → Run `ptree.exe --debug`
+4. **Want colors explained?** → Read `COLORED_OUTPUT_QUICKSTART.md`
+5. **Want to understand design?** → Read `ARCHITECTURE.md`
+6. **Want to modify code?** → Read `IMPLEMENTATION_GUIDE.md`
 
 ## Quick Reference
 
