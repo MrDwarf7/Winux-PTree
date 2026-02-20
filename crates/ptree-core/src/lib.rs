@@ -1,5 +1,7 @@
-pub mod cli;
-pub mod error;
+// pub mod cli;
+mod error;
 
-pub use cli::{parse_args, Args, ColorMode, OutputFormat};
-pub use error::{PTreeError, PTreeResult};
+// pub use cli::{Args, ColorMode, OutputFormat};
+
+// TODO: [ref] : see assoc. todo
+pub use crate::error::{PTreeError, PTreeResult};

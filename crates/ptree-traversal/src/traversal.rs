@@ -8,7 +8,7 @@ use anyhow::Result;
 use chrono::Utc;
 use parking_lot::RwLock;
 use ptree_cache::{DirEntry, DiskCache};
-use ptree_core::Args;
+use ptree_cli::Args;
 
 /// Debug timing information and statistics
 #[derive(Debug, Clone)]
@@ -76,6 +76,7 @@ pub fn traverse_disk(drive: &char, cache: &mut DiskCache, args: &Args, cache_pat
     let _ = drive;
 
     // Determine scan root: current directory by default, full drive with --force
+    // TODO: [late] : See similar 'todo' tags
     let scan_root = if args.force {
         // --force: scan full filesystem root for the current platform
         #[cfg(windows)]
@@ -96,6 +97,23 @@ pub fn traverse_disk(drive: &char, cache: &mut DiskCache, args: &Args, cache_pat
         std::env::current_dir()?
     };
 
+    // PERF: [branch_prediction] : if/else statements and similar are
+    //  incredibly bad for modern CPU branch predictors, and can cause significant performance
+    //  degradation when they are mispredicted.
+    //  Rust makes it _VERY_ easy to ensure we ARE in a given, known, consistent state at ANY point
+    //  in a program lifecycle. Abuse what the language gives you like crazy if we want performance
+    //  from it.
+    //  tl;dr-
+    //  1/2. It's _ALWAYS_ the caller's fault. Everything goes in parameters, and it's the caller's
+    //  responsibility to ensure they are correct. This is why `.unwrap_or_xyz(.....)` exists.
+    //  The caller has exponentionally more context on how to fix what happened than the current
+    //  function does, make them responsible for getting it right to begin with.
+    //  2/2. If you can move some sort of validation 'early' in the program lifecycle, do it. Do it
+    //  as early as possible. Do it before you do any work.
+    //  More validation upfront == less decisions branching later on == easier to reason about +
+    //  branch prediciton is better +++++ so many benefits.
+    //
+
     // Verify scan root exists and is a directory
     if !scan_root.exists() {
         anyhow::bail!("Scan root does not exist: {}", scan_root.display());
@@ -104,8 +122,17 @@ pub fn traverse_disk(drive: &char, cache: &mut DiskCache, args: &Args, cache_pat
         anyhow::bail!("Scan root is not a directory: {}", scan_root.display());
     }
 
-    let is_first_run = !cache.has_cache_snapshot();
+    let is_first_run = !cache.has_persisted_snapshot;
     cache.root = scan_root.clone();
+
+    // TODO: [late] : We're doing things that are 'startup' tasks
+    // when we're already 60% into the program's primary runtime.
+    // We should 100000% know _exactly_ what we're supposed to be doing at this point, and we should
+    // be doing it in the most efficient way possible.
+    // Do _ALL_ validation upfront as early as possible.
+    // If a program is in a "wrong" state, we should crash as quickly as possible with a clear error
+    // message, rather than doing a bunch of work and then crashing later on with a more confusing
+    // error.
 
     // Ensure root directory is added to cache (important for --no-cache mode)
     if is_first_run && !cache.entries.contains_key(&scan_root) {
@@ -125,10 +152,16 @@ pub fn traverse_disk(drive: &char, cache: &mut DiskCache, args: &Args, cache_pat
         cache.entries.insert(scan_root.clone(), root_entry);
     }
 
+    // BUG: [naming] : I thought we were `traverse_disk` 'ing?
+    // Why are we checking cache freshness and potentially skipping traversal here?
+    // This is partially related to the perf comment above as well (also this fn is 214 lines long)
+
     // ============================================================================
     // Check Cache Freshness (configurable via --cache-ttl, default 1 hour)
     // ============================================================================
 
+    // If you're going to set a default like this, do it via clap or serde's natural way of doing
+    // it. See TODO: [late] : for similar comments.
     let cache_ttl_seconds = args.cache_ttl.unwrap_or(3600);
 
     let should_use_cache = if args.no_cache {
@@ -212,7 +245,24 @@ pub fn traverse_disk(drive: &char, cache: &mut DiskCache, args: &Args, cache_pat
     let filter = state.changed_dirs_filter.clone();
     let root = scan_root.clone();
     let skip_stats_ref = Arc::clone(&state.skip_stats);
-    pool.in_place_scope(|s| {
+    // pool.in_place_scope(|s| {
+    //     for _ in 0..num_threads {
+    //         let work = Arc::clone(&state.work_queue);
+    //         let cache_ref = Arc::clone(&state.cache);
+    //         let skip = state.skip_dirs.clone();
+    //         let in_progress = Arc::clone(&state.in_progress);
+    //         let filter_ref = filter.clone();
+    //         let root_ref = root.clone();
+    //         let stats_ref = Arc::clone(&skip_stats_ref);
+    //
+    //         s.spawn(move |_| {
+    //             dfs_worker(&work, &cache_ref, &skip, &in_progress, &filter_ref, &root_ref, &stats_ref);
+    //         });
+    //     }
+    // });
+    let yielding = pool.yield_now();
+
+    pool.scope_fifo(|s| {
         for _ in 0..num_threads {
             let work = Arc::clone(&state.work_queue);
             let cache_ref = Arc::clone(&state.cache);
@@ -222,11 +272,15 @@ pub fn traverse_disk(drive: &char, cache: &mut DiskCache, args: &Args, cache_pat
             let root_ref = root.clone();
             let stats_ref = Arc::clone(&skip_stats_ref);
 
-            s.spawn(move |_| {
+            s.spawn_broadcast(move |scope_fifo, brdcst| {
+                scope_fifo;
+                brdcst;
                 dfs_worker(&work, &cache_ref, &skip, &in_progress, &filter_ref, &root_ref, &stats_ref);
             });
         }
     });
+    let yielding = pool.yield_now();
+
     let traversal_elapsed = traversal_start.elapsed();
 
     // ============================================================================
