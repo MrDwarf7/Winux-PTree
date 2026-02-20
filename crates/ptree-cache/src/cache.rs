@@ -1,11 +1,16 @@
-use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
-use std::fs::{self, File};
+use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, Result};
+// NOTE: [deps] : Although the default Rust hasher isn't _slow_,
+// it's generally more about being robust, than it is speed. For our use case, we want a fast,
+// non-cryptographic hash that provides good distribution for directory content hashing.
+// There's crates like `ahash` and `fxhash` that are optimized for speed, but for simplicity and to
+//  Consider if these are compatible with existing code?
+//
+use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
 use colored::Colorize;
 use rayon::slice::ParallelSliceMut;
@@ -158,62 +163,10 @@ pub struct DiskCache {
     pub persisted_entry_count: usize,
 }
 
-impl DiskCache {
-    // ============================================================================
-    // Cache Loading & Saving
-    // ============================================================================
-
-    /// Open or create cache file with fast cold-start lazy loading
-    ///
-    /// Strategy:
-    /// - Load index only (~1ms for millions of entries)
-    /// - Defer entry deserialization until output phase
-    /// - Use in-memory entries for traversal building
-    pub fn open(path: &Path) -> Result<Self> {
-        fs::create_dir_all(path.parent().unwrap())?;
-
-        // Load from lazy cache format (index only, deferred entry loading)
-        let index_path = path.with_extension("idx");
-        let data_path = path.with_extension("dat");
-
-        if index_path.exists() && data_path.exists() {
-            if let Ok(cache) = Self::load_from_lazy_cache(&index_path, &data_path) {
-                return Ok(cache);
-            }
-        }
-
-        Ok(Self::new_empty())
-    }
-
-    /// Load from lazy cache format - index only (fast cold start)
-    /// Entries not loaded until output phase to minimize startup time
-    fn load_from_lazy_cache(index_path: &Path, data_path: &Path) -> Result<Self> {
-        use crate::cache_rkyv::RkyvMmapCache;
-
-        let rkyv_cache = RkyvMmapCache::open(index_path, data_path)?;
-
-        // DO NOT load all entries - keep HashMap empty for cold-start speed
-        // Entries will be loaded on-demand during output formatting
-
-        Ok(DiskCache {
-            entries:                   HashMap::new(), // Empty - entries loaded on-demand
-            last_scan:                 rkyv_cache.index.last_scan,
-            root:                      rkyv_cache.index.root.clone(),
-            last_scanned_root:         rkyv_cache.index.last_scanned_root.clone(),
-            #[cfg(windows)]
-            usn_state:                 rkyv_cache.index.usn_state.clone(),
-            pending_writes:            Vec::new(),
-            flush_threshold:           5000,
-            show_hidden:               false,
-            skip_stats:                rkyv_cache.index.skip_stats.clone(),
-            has_persisted_snapshot:    true,
-            persisted_entry_count:     rkyv_cache.index.offsets.len(),
-        })
-    }
-
+impl Default for DiskCache {
     /// Create a new empty cache with default USN state
     #[cfg(windows)]
-    fn new_empty() -> Self {
+    fn default() -> Self {
         DiskCache {
             // Pre-allocate for typical disk with ~100k directories
             // Reduces reallocation overhead during traversal
@@ -233,7 +186,7 @@ impl DiskCache {
 
     /// Create a new empty cache with default USN state (non-Windows)
     #[cfg(not(windows))]
-    fn new_empty() -> Self {
+    fn default() -> Self {
         DiskCache {
             // Pre-allocate for typical disk with ~100k directories
             // Reduces reallocation overhead during traversal
@@ -249,6 +202,45 @@ impl DiskCache {
             persisted_entry_count:  0,
         }
     }
+}
+
+impl DiskCache {
+    // ============================================================================
+    // Cache Loading & Saving
+    // ============================================================================
+
+    /// Open or create cache file with fast cold-start lazy loading
+    /// Caller is responsible for ensuring the directory exists
+    /// before calling this funciton.
+    ///
+    /// # Strategy:
+    /// * Load index only (~1ms for millions of entries)
+    /// * Defer entry deserialization until output phase
+    /// * Use in-memory entries for traversal building
+    ///
+    /// # Note
+    /// Failure to find either the `index_path`
+    /// or the `data_path` is considered a fallible operation.
+    /// As such we return `None` and the caller must manage the fallback logic.
+    ///
+    /// # Returns
+    ///
+    /// * `Some(DiskCache)` if both index and data files are found and loaded successfully.
+    /// * `None` if either the index or data file is missing, indicating no valid cache snapshot is
+    /// available.
+    ///
+    // pub fn open(path: &Path) -> Result<Self> {
+    pub fn open<P: AsRef<Path>>(path: P) -> Option<Self> {
+        // Load from lazy cache format (index only, deferred entry loading)
+        let index_path = path.as_ref().with_extension("idx");
+        let data_path = path.as_ref().with_extension("dat");
+
+        if index_path.exists() && data_path.exists() {
+            let rkyv_cache = crate::cache_rkyv::RkyvMmapCache::open(&index_path, &data_path).ok()?;
+            return Some(Self::from(rkyv_cache));
+        }
+        None
+    }
 
     /// Save cache using rkyv mmap format (index + data files with O(1) access)
     pub fn save(&mut self, path: &Path) -> Result<()> {
@@ -261,11 +253,6 @@ impl DiskCache {
 
         self.save_as_rkyv_mmap(&index_path, &data_path)?;
         Ok(())
-    }
-
-    /// True if we have an existing on-disk cache snapshot.
-    pub fn has_cache_snapshot(&self) -> bool {
-        self.has_persisted_snapshot
     }
 
     /// Entry-count hint for cache-hit stats when entries are lazily loaded.
@@ -281,7 +268,7 @@ impl DiskCache {
     fn save_as_rkyv_mmap(&self, index_path: &Path, data_path: &Path) -> Result<()> {
         use crate::cache_rkyv::{RkyvCacheIndex, RkyvDirEntry};
 
-        fs::create_dir_all(index_path.parent().unwrap())?;
+        std::fs::create_dir_all(index_path.parent().unwrap())?;
 
         // Build index with byte offsets
         let mut rkyv_index = RkyvCacheIndex::new();
@@ -295,7 +282,7 @@ impl DiskCache {
             rkyv_index.usn_state = self.usn_state.clone();
         }
 
-        let data_file = File::create(data_path)?;
+        let data_file = std::fs::File::create(data_path)?;
         let mut data_file = BufWriter::with_capacity(8 * 1024 * 1024, data_file);
         let mut offset: u64 = 0;
 
@@ -325,12 +312,12 @@ impl DiskCache {
         // Save index
         let index_serialized = bincode::serialize(&rkyv_index)?;
         let temp_path = index_path.with_extension("tmp");
-        let index_file = File::create(&temp_path)?;
+        let index_file = std::fs::File::create(&temp_path)?;
         let mut index_file = BufWriter::new(index_file);
         index_file.write_all(&index_serialized)?;
         index_file.flush()?;
         drop(index_file);
-        fs::rename(&temp_path, index_path)?;
+        std::fs::rename(&temp_path, index_path)?;
 
         Ok(())
     }
@@ -714,6 +701,25 @@ impl DiskCache {
     }
 }
 
+impl From<crate::cache_rkyv::RkyvMmapCache> for DiskCache {
+    fn from(rkyv_cache: crate::cache_rkyv::RkyvMmapCache) -> Self {
+        DiskCache {
+            entries:                   HashMap::new(), // Empty - entries loaded on-demand
+            last_scan:                 rkyv_cache.index.last_scan,
+            root:                      rkyv_cache.index.root.clone(),
+            last_scanned_root:         rkyv_cache.index.last_scanned_root.clone(),
+            #[cfg(windows)]
+            usn_state:                 rkyv_cache.index.usn_state.clone(),
+            pending_writes:            Vec::new(),
+            flush_threshold:           5000,
+            show_hidden:               false,
+            skip_stats:                rkyv_cache.index.skip_stats.clone(),
+            has_persisted_snapshot:    true,
+            persisted_entry_count:     rkyv_cache.index.offsets.len(),
+        }
+    }
+}
+
 /// Get cache directory path
 pub fn get_cache_path() -> Result<PathBuf> {
     #[cfg(windows)]
@@ -772,14 +778,14 @@ mod tests {
     #[test]
     fn test_cache_creation() -> Result<()> {
         let temp_dir = std::env::temp_dir().join("ptree_test_cache");
-        fs::create_dir_all(&temp_dir)?;
+        std::fs::create_dir_all(&temp_dir)?;
         let cache_path = temp_dir.join("test.dat");
 
         let cache = DiskCache::open(&cache_path)?;
         assert!(cache.entries.is_empty());
 
         // Clean up
-        let _ = fs::remove_dir_all(&temp_dir);
+        let _ = std::fs::remove_dir_all(&temp_dir);
         Ok(())
     }
 
@@ -896,7 +902,7 @@ mod tests {
 
     #[test]
     fn test_remove_entry_uses_path_components() {
-        let mut cache = DiskCache::new_empty();
+        let mut cache = DiskCache::default();
         let base = std::path::PathBuf::from("/foo");
         let child = std::path::PathBuf::from("/foo/bar");
         let sibling_prefix = std::path::PathBuf::from("/foobar");

@@ -209,6 +209,14 @@ pub fn traverse_disk(drive: &char, cache: &mut DiskCache, args: &Args, cache_pat
     // ============================================================================
 
     let mut work_queue = VecDeque::new();
+
+    // PERF: [known] : We can estimate a rough starting size via `.with_capacity()` to avoid some
+    // reallocations during traversal
+    // 2. We can do this without a lock by using a localized semaphore on the actual
+    // logic when taking or pushing items to it.
+    // Taking items, use `.take()` and it's atomic and lock-free.
+    // Pushing items, use a thread-local buffer and flush it's updates.
+    // ( You can also chunk those flushes if you can track the thread work at the same time. )
     work_queue.push_back(scan_root.clone());
 
     let state = TraversalState {
@@ -245,24 +253,7 @@ pub fn traverse_disk(drive: &char, cache: &mut DiskCache, args: &Args, cache_pat
     let filter = state.changed_dirs_filter.clone();
     let root = scan_root.clone();
     let skip_stats_ref = Arc::clone(&state.skip_stats);
-    // pool.in_place_scope(|s| {
-    //     for _ in 0..num_threads {
-    //         let work = Arc::clone(&state.work_queue);
-    //         let cache_ref = Arc::clone(&state.cache);
-    //         let skip = state.skip_dirs.clone();
-    //         let in_progress = Arc::clone(&state.in_progress);
-    //         let filter_ref = filter.clone();
-    //         let root_ref = root.clone();
-    //         let stats_ref = Arc::clone(&skip_stats_ref);
-    //
-    //         s.spawn(move |_| {
-    //             dfs_worker(&work, &cache_ref, &skip, &in_progress, &filter_ref, &root_ref, &stats_ref);
-    //         });
-    //     }
-    // });
-    let yielding = pool.yield_now();
-
-    pool.scope_fifo(|s| {
+    pool.in_place_scope(|s| {
         for _ in 0..num_threads {
             let work = Arc::clone(&state.work_queue);
             let cache_ref = Arc::clone(&state.cache);
@@ -272,14 +263,32 @@ pub fn traverse_disk(drive: &char, cache: &mut DiskCache, args: &Args, cache_pat
             let root_ref = root.clone();
             let stats_ref = Arc::clone(&skip_stats_ref);
 
-            s.spawn_broadcast(move |scope_fifo, brdcst| {
-                scope_fifo;
-                brdcst;
-                dfs_worker(&work, &cache_ref, &skip, &in_progress, &filter_ref, &root_ref, &stats_ref);
+            s.spawn(move |_| {
+                dfs_worker(work, cache_ref, &skip, in_progress, filter_ref, root_ref, stats_ref);
             });
         }
     });
-    let yielding = pool.yield_now();
+
+    // let yielding = pool.yield_now();
+    //
+    // pool.scope_fifo(|s| {
+    //     for _ in 0..num_threads {
+    //         let work = Arc::clone(&state.work_queue);
+    //         let cache_ref = Arc::clone(&state.cache);
+    //         let skip = state.skip_dirs.clone();
+    //         let in_progress = Arc::clone(&state.in_progress);
+    //         let filter_ref = filter.clone();
+    //         let root_ref = root.clone();
+    //         let stats_ref = Arc::clone(&skip_stats_ref);
+    //
+    //         s.spawn_broadcast(move |scope_fifo, brdcst| {
+    //             scope_fifo;
+    //             brdcst;
+    //             dfs_worker(&work, &cache_ref, &skip, &in_progress, &filter_ref, &root_ref, &stats_ref);
+    //         });
+    //     }
+    // });
+    // let yielding = pool.yield_now();
 
     let traversal_elapsed = traversal_start.elapsed();
 
@@ -349,13 +358,13 @@ pub fn traverse_disk(drive: &char, cache: &mut DiskCache, args: &Args, cache_pat
 /// 4. For incremental updates: only process directories in changed_dirs_filter
 /// 5. Buffers children in cache and queues directories for processing
 fn dfs_worker(
-    work_queue: &Arc<Mutex<VecDeque<PathBuf>>>,
-    cache: &Arc<RwLock<DiskCache>>,
+    work_queue: Arc<Mutex<VecDeque<PathBuf>>>,
+    cache: Arc<RwLock<DiskCache>>,
     skip_dirs: &std::collections::HashSet<String>,
-    in_progress: &Arc<Mutex<std::collections::HashSet<PathBuf>>>,
-    changed_dirs_filter: &Option<std::collections::HashSet<String>>,
-    scan_root: &PathBuf,
-    skip_stats: &Arc<Mutex<std::collections::HashMap<String, usize>>>,
+    in_progress: Arc<Mutex<std::collections::HashSet<PathBuf>>>,
+    changed_dirs_filter: Option<std::collections::HashSet<String>>,
+    scan_root: impl AsRef<Path>,
+    skip_stats: Arc<Mutex<std::collections::HashMap<String, usize>>>,
 ) {
     // Thread-local buffers to batch cache writes and reduce lock contention
     let mut entry_buffer: Vec<(PathBuf, DirEntry)> = Vec::with_capacity(500);
@@ -420,10 +429,10 @@ fn dfs_worker(
                 // Check Incremental Filter (if applicable)
                 // ============================================================
 
-                let should_process = if let Some(filter) = changed_dirs_filter {
+                let should_process = if let Some(ref filter) = changed_dirs_filter {
                     // Incremental mode: only process if this directory changed
                     let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                    filter.contains(dir_name) || path == *scan_root
+                    filter.contains(dir_name) || path == scan_root.as_ref()
                 } else {
                     // Full scan mode: process all directories
                     true

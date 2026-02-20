@@ -70,7 +70,7 @@ impl RkyvMmapCache {
     /// Load cache from rkyv-serialized index and data files
     /// Index is fully deserialized (small), data is mmap'd (large, lazy access)
     pub fn open(index_path: &std::path::Path, data_path: &std::path::Path) -> Result<Self> {
-        fs::create_dir_all(index_path.parent().unwrap())?;
+        std::fs::create_dir_all(index_path.parent().unwrap())?;
 
         // Load index (small, safe to fully deserialize using serde)
         let index = if index_path.exists() {
