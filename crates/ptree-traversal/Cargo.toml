@@ -1,17 +1,18 @@
 [package]
 name = "ptree-traversal"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-ptree-core = { path = "../ptree-core" }
+ptree-cli = { path = "../ptree-cli" }
 ptree-cache = { path = "../ptree-cache" }
-anyhow = "1.0"
-chrono = "0.4"
-parking_lot = "0.12"
-rayon = "1.8"
+
+anyhow = { workspace = true }
+chrono = { workspace = true }
 num_cpus = "1.16"
+parking_lot = { workspace = true }
+rayon = { workspace = true }
 
 [features]
 default = ["std"]

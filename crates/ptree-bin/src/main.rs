@@ -2,37 +2,24 @@ use std::time::Instant;
 
 use anyhow::Result;
 use ptree_cache::DiskCache;
-use ptree_core::{ColorMode, OutputFormat};
+use ptree_cli::{ColorMode, OutputFormat};
 #[cfg(feature = "scheduler")]
-use ptree_scheduler as scheduler;
+// use ptree_scheduler as scheduler;
 use ptree_traversal::traverse_disk;
 
 fn main() -> Result<()> {
     let program_start = Instant::now();
 
-    let args = ptree_core::parse_args();
+    let args = ptree_cli::Args::new();
 
     // ========================================================================
     // Handle Scheduler Commands (Early Exit)
     // ========================================================================
-
     #[cfg(feature = "scheduler")]
-    {
-        if args.scheduler {
-            scheduler::install_scheduler()?;
-            return Ok(());
-        }
-
-        if args.scheduler_uninstall {
-            scheduler::uninstall_scheduler()?;
-            return Ok(());
-        }
-
-        if args.scheduler_status {
-            scheduler::check_scheduler_status()?;
-            return Ok(());
-        }
-    }
+    args.scheduler_args().unwrap_or_else(|e| {
+        eprintln!("Error parsing scheduler arguments: {}", e);
+        std::process::exit(1);
+    });
 
     // ========================================================================
     // Determine Color Output Settings
@@ -49,13 +36,23 @@ fn main() -> Result<()> {
     // ========================================================================
 
     let cache_path = ptree_cache::get_cache_path_custom(args.cache_dir.as_deref())?;
+    std::fs::create_dir_all(cache_path.parent().unwrap()).expect("Failed to create cache directory");
+
     let cache_load_start = Instant::now();
-    let mut cache = DiskCache::open(&cache_path)?;
+
+    let mut cache = DiskCache::open(&cache_path).unwrap_or_default();
+
     let cache_load_elapsed = cache_load_start.elapsed();
 
     // ========================================================================
     // Traverse Disk & Update Cache
     // ========================================================================
+
+    // HACK: What we're doing here ( with args.drive + the throwaway thing in the fn )
+    // is a _clear_ sign we need to approach the way we're doing cross platform
+    // interop differently.
+    // The fact that we have to pass in the drive letter as a char for Unix systems at all
+    // is itself evidence we need to change up the impl. ( hint: traits + behind comp flags )
 
     let debug_info = traverse_disk(&args.drive, &mut cache, &args, &cache_path)?;
 

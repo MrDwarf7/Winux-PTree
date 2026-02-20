@@ -1,0 +1,65 @@
+[package]
+name = "ptree"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "ptree"
+path = "src/main.rs"
+
+# Must move [[bench]] to child due to virtual manifest limitations
+[[bench]]
+name = "traversal_benchmarks"
+path = "../benches/traversal_benchmarks.rs"
+harness = false
+
+[features]
+default = ["scheduler"]
+scheduler = ["ptree-scheduler"]
+incremental = ["ptree-incremental"]
+
+
+[dependencies]
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+atty = { workspace = true }
+
+
+## Ptree crate/lib dependencies
+
+[dependencies.ptree-core]
+workspace = true
+features = []
+
+[dependencies.ptree-cache]
+workspace = true
+default-features = false
+features = ["std"]
+
+[dependencies.ptree-traversal]
+workspace = true
+default-features = false
+features = ["std"]
+
+# NOTE: may not need this if we make ptree-cli be point of import for it.
+# That also means that ptree-cli owns the feature as well (and we can prevent awkward feature dependencies)
+[dependencies.ptree-scheduler]
+workspace = true
+optional = true
+features = []
+
+[dependencies.ptree-incremental]
+workspace = true
+optional = true
+features = []
+
+[dependencies.ptree-cli]
+workspace = true
+default-features = false
+features = ["scheduler"]
+
+
+[dev-dependencies]
+# criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { workspace = true, features = ["html_reports"] }
