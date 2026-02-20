@@ -2,6 +2,14 @@
 *.exe
 *.dll
 
+.my_benches/
+/.my_benches
+/.my_benches/
+
+.old/
+/.old
+/.old/
+
 /tools/ptree-update-prompt/target/
 tools/ptree-update-prompt/target/*
 tools/ptree-update-prompt/target/

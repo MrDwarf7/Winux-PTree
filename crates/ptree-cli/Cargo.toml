@@ -1,0 +1,16 @@
+[package]
+name = "ptree-cli"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[features]
+default = ["scheduler"]
+scheduler = ["dep:ptree-scheduler"]
+
+[dependencies]
+ptree-core = { path = "../ptree-core", optional = false }
+ptree-scheduler = { path = "../ptree-scheduler", optional = true }
+
+clap = { workspace = true }
+thiserror = { workspace = true }

@@ -1,6 +1,14 @@
+mod error;
 use std::collections::HashSet;
 
 use clap::Parser;
+use ptree_scheduler as scheduler;
+
+// use ptree_core::{PTreeError as Error, PTreeResult as Result};
+use crate::error::{Error, Result};
+// NOTE: We should NEVER import from root as the alias'd _outbound_ names.
+//
+pub use crate::error::{Error as PTreeCliError, Result as PTreeCliResult};
 
 // ============================================================================
 // Output Format Options
@@ -15,7 +23,7 @@ pub enum OutputFormat {
 impl std::str::FromStr for OutputFormat {
     type Err = String;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "tree" | "ascii" => Ok(OutputFormat::Tree),
             "json" => Ok(OutputFormat::Json),
@@ -36,14 +44,14 @@ pub enum ColorMode {
 }
 
 impl std::str::FromStr for ColorMode {
-    type Err = String;
+    type Err = crate::Error;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> Result<Self> {
         match s.to_lowercase().as_str() {
             "auto" => Ok(ColorMode::Auto),
             "always" => Ok(ColorMode::Always),
             "never" => Ok(ColorMode::Never),
-            other => Err(format!("Unknown color mode: {}", other)),
+            other => Err(Error::InvalidDrive(format!("Unknown color mode: {}", other))),
         }
     }
 }
@@ -143,23 +151,83 @@ pub struct Args {
     // Scheduler Options
     // ========================================================================
     /// Setup automatic cache refresh every 30 minutes (Windows Task Scheduler / cron)
+
+    #[cfg(feature = "scheduler")]
     #[arg(long)]
     pub scheduler: bool,
 
     /// Remove scheduled cache updates
+    #[cfg(feature = "scheduler")]
     #[arg(long)]
     pub scheduler_uninstall: bool,
 
     /// Show scheduler status
     #[arg(long)]
+    #[cfg(feature = "scheduler")]
     pub scheduler_status: bool,
 }
 
-pub fn parse_args() -> Args {
-    Args::parse()
-}
-
 impl Args {
+    pub fn new() -> Self {
+        Args::parse()
+    }
+
+    #[cfg(feature = "scheduler")]
+    pub fn scheduler_args(&self) -> Result<()> {
+        use ptree_scheduler::TaskTypes;
+
+        let flag_to_act = [
+            (self.scheduler, TaskTypes::Install(scheduler::InstallTask)),
+            (self.scheduler_uninstall, TaskTypes::Uninstall(scheduler::UninstallTask)),
+            (self.scheduler_status, TaskTypes::Check(scheduler::CheckTask)),
+        ];
+
+        flag_to_act.into_iter().try_for_each(|(flag, task)| {
+            if flag {
+                use ptree_scheduler::PTreeSchedulerError;
+                // either works, feel free to remove one or the other
+                task.run()?; // scheduler::run_task(task)?;
+                return Ok::<(), PTreeSchedulerError>(());
+            }
+            Ok(())
+        })?;
+
+        // // alt impl.
+        //
+        // let tasks = [
+        //     TaskTypes::Install(scheduler::InstallTask),
+        //     TaskTypes::Uninstall(scheduler::UninstallTask),
+        //     TaskTypes::Check(scheduler::CheckTask),
+        // ];
+        // let actions = [self.scheduler, self.scheduler_uninstall, self.scheduler_status];
+        // actions.iter().zip(tasks.into_iter()).try_for_each(|(flag, task)| {
+        //     if *flag {
+        //         use ptree_scheduler::PTreeSchedulerError;
+        //
+        //         scheduler::run_task(task)?;
+        //         return Ok::<(), PTreeSchedulerError>(());
+        //     }
+        //     Ok(())
+        // })?;
+
+        // if self.scheduler {
+        //     scheduler::InstallTask.install()?;
+        //     return Ok(());
+        // }
+        //
+        // if self.scheduler_uninstall {
+        //     scheduler::UninstallTask.uninstall()?;
+        //     return Ok(());
+        // }
+        //
+        // if self.scheduler_status {
+        //     scheduler::CheckTask.check_status()?;
+        //     return Ok(());
+        // }
+
+        return Ok(());
+    }
+
     /// Build skip directory set based on arguments
     pub fn skip_dirs(&self) -> HashSet<String> {
         let mut skip = Self::default_skip_dirs();

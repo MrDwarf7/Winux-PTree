@@ -1,7 +1,7 @@
 [package]
 name = "ptree-driver"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [lib]
@@ -15,8 +15,9 @@ path = "src/main.rs"
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-anyhow = "1.0"
-thiserror = "1.0"
+# anyhow = "1.0"
+anyhow = { workspace = true }
+thiserror = { workspace = true }
 chrono = { version = "0.4", features = ["serde"] }
 parking_lot = "0.12"
 log = "0.4"
@@ -25,23 +26,23 @@ ctrlc = "3.4"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = [
-    "fileapi",
-    "winnt",
-    "handleapi",
-    "winioctl",
-    "ntdef",
-    "ioapiset",
-    "minwindef",
-    "winbase",
-    "winerror",
-    "winsvc",
-    "winreg"
+  "fileapi",
+  "winnt",
+  "handleapi",
+  "winioctl",
+  "ntdef",
+  "ioapiset",
+  "minwindef",
+  "winbase",
+  "winerror",
+  "winsvc",
+  "winreg",
 ] }
 windows = { version = "0.52", features = [
-    "Win32_Foundation",
-    "Win32_Storage_FileSystem",
-    "Win32_System_Memory",
-    "Win32_System_IO",
-    "Win32_System_Services"
+  "Win32_Foundation",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Memory",
+  "Win32_System_IO",
+  "Win32_System_Services",
 ] }
 winreg = "0.52"
