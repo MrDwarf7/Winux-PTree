@@ -1,5 +1,6 @@
-use clap::Parser;
 use std::collections::HashSet;
+
+use clap::Parser;
 
 // ============================================================================
 // Output Format Options
@@ -53,12 +54,11 @@ impl std::str::FromStr for ColorMode {
 /// for near-instant subsequent runs.
 #[derive(Parser, Debug)]
 #[command(name = "ptree")]
-#[command(about = "Fast disk tree visualization with incremental caching")]
+#[command(about = "Fast disk tree visualization with persistent caching")]
 pub struct Args {
     // ========================================================================
     // Drive & Scanning Options
     // ========================================================================
-
     /// Drive letter (e.g., C, D)
     #[arg(short, long, default_value = "C")]
     pub drive: char,
@@ -74,7 +74,6 @@ pub struct Args {
     // ========================================================================
     // Cache Options
     // ========================================================================
-
     /// Cache time-to-live in seconds (default: 3600)
     #[arg(long)]
     pub cache_ttl: Option<u64>,
@@ -90,7 +89,6 @@ pub struct Args {
     // ========================================================================
     // Output & Display Options
     // ========================================================================
-
     /// Suppress tree output (useful when just updating cache)
     #[arg(short, long)]
     pub quiet: bool,
@@ -114,7 +112,6 @@ pub struct Args {
     // ========================================================================
     // Filtering & Traversal Options
     // ========================================================================
-
     /// Maximum depth to display
     #[arg(short, long)]
     pub max_depth: Option<usize>,
@@ -130,47 +127,37 @@ pub struct Args {
     // ========================================================================
     // Performance Options
     // ========================================================================
-
     /// Maximum threads (default: physical cores * 2, capped at 3x cores)
     #[arg(short = 'j', long)]
     pub threads: Option<usize>,
-
-    /// Enable incremental updates via USN Journal (Windows only)
-    #[arg(long)]
-    pub incremental: bool,
-
-    // ========================================================================
-    // Output Options
-    // ========================================================================
 
     /// Display summary statistics (total dirs, files, timing, cache location)
     #[arg(long)]
     pub stats: bool,
 
     /// Show skip statistics (directories skipped during traversal)
-     #[arg(long)]
-     pub skip_stats: bool,
-    
-     // ========================================================================
-     // Scheduler Options
-     // ========================================================================
-    
-     /// Setup automatic cache refresh every 30 minutes (Windows Task Scheduler / cron)
-     #[arg(long)]
-     pub scheduler: bool,
-    
-     /// Remove scheduled cache updates
-     #[arg(long)]
-     pub scheduler_uninstall: bool,
-    
-     /// Show scheduler status
-     #[arg(long)]
-     pub scheduler_status: bool,
-    }
-    
-    pub fn parse_args() -> Args {
-     Args::parse()
-    }
+    #[arg(long)]
+    pub skip_stats: bool,
+
+    // ========================================================================
+    // Scheduler Options
+    // ========================================================================
+    /// Setup automatic cache refresh every 30 minutes (Windows Task Scheduler / cron)
+    #[arg(long)]
+    pub scheduler: bool,
+
+    /// Remove scheduled cache updates
+    #[arg(long)]
+    pub scheduler_uninstall: bool,
+
+    /// Show scheduler status
+    #[arg(long)]
+    pub scheduler_status: bool,
+}
+
+pub fn parse_args() -> Args {
+    Args::parse()
+}
 
 impl Args {
     /// Build skip directory set based on arguments
